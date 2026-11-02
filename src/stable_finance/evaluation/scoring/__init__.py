@@ -1,4 +1,4 @@
-"""Stage 5, how good each stage's output is: the IC of a forecast, the P&L and Sharpe of a portfolio, how much of the forecast reached the weights (the transfer coefficient), execution-quality curves, and the statistics that keep a sweep of many configurations honest."""
+"""Stage 5, how good each stage's output is: the IC of a forecast, the P&L and Sharpe of a portfolio, how much of the forecast reached the weights (the transfer coefficient), execution-quality curves and implementation shortfall, and the statistics that keep a sweep of many configurations honest."""
 
 from stable_finance.evaluation.scoring.exposure import PortfolioExposure, portfolio_exposure
 from stable_finance.evaluation.scoring.ic import (
@@ -23,6 +23,10 @@ from stable_finance.evaluation.scoring.sharpe import (
     sharpe_ratio,
     sharpe_vs_execution_quality,
 )
+from stable_finance.evaluation.scoring.shortfall import (
+    ImplementationShortfall,
+    implementation_shortfall,
+)
 from stable_finance.evaluation.scoring.stats import (
     PBOResult,
     SharpeDifference,
@@ -42,6 +46,7 @@ from stable_finance.evaluation.scoring.tc import (
 __all__ = [
     "BacktestResult",
     "ExecutionQualityCurve",
+    "ImplementationShortfall",
     "InformationCoefficient",
     "PBOResult",
     "PortfolioExposure",
@@ -57,6 +62,7 @@ __all__ = [
     "expected_max_sharpe",
     "grouped_rank_ic",
     "grouped_rank_ic_by_label",
+    "implementation_shortfall",
     "mid_price_sharpe",
     "min_track_record",
     "paired_difference",
