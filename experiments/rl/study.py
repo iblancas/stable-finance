@@ -267,19 +267,21 @@ def compare(train: Panel, test: Panel, config: sf.BacktestConfig, *, seeds: int 
     log(f"  explore {time.perf_counter() - start:.0f}s")
     if dqn:
         from experiments.rl.dqn import train as train_dqn
+        from experiments.rl.ppo import train as train_ppo
 
-        def agents(**kwargs):
+        def agents(learn, **kwargs):
             start = time.perf_counter()
             rows = []
             for s in range(seeds):
-                agent = train_dqn(day_env, episodes=dqn_episodes, seed=s, **kwargs)
+                agent = learn(day_env, episodes=dqn_episodes, seed=s, **kwargs)
                 rows.append(scored(agent.policy(test_env), base=base))
-            log(f"  dqn {kwargs or ''} {time.perf_counter() - start:.0f}s")
+            log(f"  {learn.__module__} {sorted(kwargs)} {time.perf_counter() - start:.0f}s")
             return _pool(rows)
 
-        arms["double DQN"] = agents()
+        arms["double DQN"] = agents(train_dqn)
         band_expert = NoTradeBand(day_env, band_width)
-        arms["double DQN, band in buffer"] = agents(experts={"band": band_expert})
+        arms["double DQN, band in buffer"] = agents(train_dqn, experts={"band": band_expert})
+        arms["PPO"] = agents(train_ppo)
     if limit is not None:
         arms.update(_coupled(train, test, config, limit, band_width, rate, seeds, dqn,
                              dqn_episodes, log))
@@ -300,12 +302,15 @@ def _coupled(train, test, config, limit, band_width, rate, seeds, dqn, dqn_episo
     if not dqn:
         return arms
     from experiments.rl.dqn import train as train_dqn
+    from experiments.rl.ppo import train as train_ppo
 
     training = NetLimit(make_env(train, config, episode_days=1), limit)
-    for name, kwargs in (("independent", {}), ("team (VDN)", {"team": True}),
-                         ("team + intention", {"team": True, "intention": True})):
+    for name, learn, kwargs in (("independent", train_dqn, {}),
+                                ("team (VDN)", train_dqn, {"team": True}),
+                                ("team + intention", train_dqn, {"team": True, "intention": True}),
+                                ("PPO", train_ppo, {})):
         start = time.perf_counter()
-        rows = [scored(train_dqn(training, episodes=dqn_episodes, seed=s, **kwargs).policy(limited),
+        rows = [scored(learn(training, episodes=dqn_episodes, seed=s, **kwargs).policy(limited),
                        base) for s in range(seeds)]
         arms[f"limit: {name}"] = _pool(rows)
         log(f"  {name} {time.perf_counter() - start:.0f}s")
