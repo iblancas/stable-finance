@@ -256,6 +256,62 @@ policy = ParametricPolicy(gross_exposure=2.0, risk_aversion=5.0).fit(
 held = policy.predict(test_forecasts, cost=test_market)    # PortfolioWeights
 ```
 
+`ExecutionEnv` is the environment a policy is learned in one decision at a
+time, with Gymnasium's `reset` and `step`. The action is a trading rate per
+name in `[0, 1]`, the fraction of the gap to the target to trade now; the
+observation is the policy's own book beside what the market showed at the
+decision (never the arrival quotes, the execution window or the realized
+return); the reward is the harness's net return for that decision, from the
+configuration's own cost model. An episode's path, handed to `run_backtest`,
+reproduces its rewards for any policy, and trading at rate one reproduces
+`run_backtest` on the target. Under the impact models every slice of a parent
+order is charged as one order, so splitting a trade buys nothing. With
+`episode_days=1` each `reset` draws one trading day, for training; without it
+an episode is the whole panel. `trades.rl.gym.GymExecutionEnv` (the `rl`
+extra) adapts it for learners that expect a `gymnasium.Env`.
+
+```python
+from stable_finance import ExecutionEnv, implementation_shortfall, rollout
+
+env = ExecutionEnv(target, realized, market, days=days, config=config)
+episode = rollout(env, lambda observation: 0.3)          # any callable policy
+run_backtest(episode.weights, realized, market=market, days=days,
+             config=config, with_series=True).series.net  # == episode.net
+implementation_shortfall(episode.target, episode.fills, episode.realized)
+```
+
+The reward is exactly a sum over names, so `step` also reports it name by
+name in `info["payoff"]`, and a learner can treat each name as an agent. A
+`ReplayBuffer` holds one row per name and decision, and `collect` is the way
+to fill it: it plays any callable in the environment and stores what the
+environment charged. An expert therefore supplies what it would trade and
+never what that paid, as a policy or as a weight path through `FollowPath`.
+`RatePerEpisode`, `RandomWalkRate` and `RandomRate` play random rates on the
+real market. Because the market is replayed, `parallel_alternates` can also ask what each
+rate would have paid at a decision, from any position, without playing it;
+under an impact schedule it refuses, since an order's cost there depends on
+the orders before it. It reads the realized return, so it is for training. An
+episode that stops where the panel goes on is truncated, not terminated: the
+book carries overnight, so a learner keeps bootstrapping through the close.
+
+```python
+from stable_finance import (
+    FollowPath, RatePerEpisode, ReplayBuffer, collect, row_features,
+)
+
+days_env = ExecutionEnv(target, realized, market, days=days, config=config,
+                        episode_days=1)
+buffer = ReplayBuffer(1_000_000, len(row_features(days_env)), seed=0)
+collect(days_env, RatePerEpisode(), buffer, episodes=200, seed=0, source="random")
+
+expert = FollowPath(env, expert_weights)      # env plays the path as one episode
+collect(env, expert, buffer, source="expert")
+expert.unexpressed                            # the share no rate in [0, 1] could do
+
+batch = buffer.sample(256)                    # rows, rate, reward, next_rows, ...
+env.parallel_alternates([0.0, 0.5, 1.0], held=positions, decision=t)   # a Payoff; nothing played
+```
+
 Orders are the weight changes along a target path; fills are what executed:
 
 ```python

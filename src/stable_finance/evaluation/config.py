@@ -51,7 +51,13 @@ from stable_finance.evaluation.portfolio.signals import (
     NEUTRALIZATIONS,
     SIGNAL_REQUIRES,
 )
-from stable_finance.evaluation.trades.rebalance import REBALANCE_SOLVERS
+
+#: The solvers, by name. ``"restart"`` is accelerated proximal gradient with
+#: adaptive restart in a variance-scaled metric, run until the step falls
+#: below ``tol``; ``"fista"`` is FISTA stopped at the ``max_iter`` budget.
+#: Here rather than beside the solvers so the configuration needs nothing from
+#: the trades stage, whose environment reads the configuration.
+REBALANCE_SOLVERS = ("restart", "fista")
 
 __all__ = [
     "ANNUALIZATIONS",

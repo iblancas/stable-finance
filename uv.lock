@@ -945,6 +945,15 @@ wheels = [
 ]
 
 [[package]]
+name = "farama-notifications"
+version = "0.0.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/91/14397890dde30adc4bee6462158933806207bc5dd10d7b4d09d5c33845cf/farama_notifications-0.0.6.tar.gz", hash = "sha256:b19acac4bb41d76e59e03394b5dd165f4761c86fa327f56307a35cbee3b60158", size = 2517, upload-time = "2026-04-24T08:43:57.603Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/f0/21f81892e4ed10f4ec3ef2e7cf8635fb76e7c0907c55d0da66be50094760/farama_notifications-0.0.6-py3-none-any.whl", hash = "sha256:f84839188efa1ce5bb361c2a84881b2dc2c0d0d7fb661ff00421820170930935", size = 2897, upload-time = "2026-04-24T08:43:56.785Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.32.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1212,6 +1221,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8a/c5/4353a188e2c335aee33269e8b654af228278cca8e5f0b4b5f11e5d0e9adb/googleapis_common_protos-1.75.3.tar.gz", hash = "sha256:57c435ac2c68b108999b6db075d9053e4d7a936ba57b4a3d45667b1346f1738a", size = 153905, upload-time = "2026-09-03T22:31:21.869Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/7a/7d79170c6ce6f12e109df2b3879d6b934010cf4f99aea8de8b7e5408c174/googleapis_common_protos-1.75.3-py3-none-any.whl", hash = "sha256:a018d2bf098ca9fb6faa08d5bb780e2a2c2f73c566f069761331386c9596d3f2", size = 306984, upload-time = "2026-09-03T22:30:45.133Z" },
+]
+
+[[package]]
+name = "gymnasium"
+version = "1.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "farama-notifications" },
+    { name = "numpy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/3a/6713c8a92c259fd7619dc93ff19e6e435463f20d3d7b180b14ce99074c10/gymnasium-1.4.0.tar.gz", hash = "sha256:9754f630a32abfdbb76386abe1bc1e706c982db2d62dfa119c9952eb2de7697d", size = 350436, upload-time = "2026-10-05T11:02:16.217Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/4e/6a51be94ae8e9dc8eaddd6ea74a6dde754448c4c746b51a232681f81e41c/gymnasium-1.4.0-py3-none-any.whl", hash = "sha256:1cb947c59e7c72d8eabb2c2274c00cd20948e69f8452a9ef4092223be24fdf0e", size = 476306, upload-time = "2026-10-05T11:02:14.783Z" },
 ]
 
 [[package]]
@@ -2803,6 +2827,7 @@ experiments = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "torch" },
 ]
 hf = [
     { name = "huggingface-hub" },
@@ -2814,6 +2839,9 @@ mds = [
     { name = "tqdm" },
     { name = "zstandard" },
 ]
+rl = [
+    { name = "gymnasium" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -2822,6 +2850,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "gymnasium", marker = "extra == 'rl'", specifier = ">=1.0" },
     { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=0.30" },
     { name = "joblib", marker = "extra == 'mds'", specifier = ">=1.5.0" },
     { name = "matplotlib", marker = "extra == 'experiments'", specifier = ">=3.9" },
@@ -2831,10 +2860,11 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'mds'", specifier = ">=2.3.0" },
     { name = "pyarrow", marker = "extra == 'experiments'", specifier = ">=17.0" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
+    { name = "torch", marker = "extra == 'experiments'", specifier = ">=2.0" },
     { name = "tqdm", marker = "extra == 'mds'", specifier = ">=4.67.0" },
     { name = "zstandard", marker = "extra == 'mds'", specifier = ">=0.25.0" },
 ]
-provides-extras = ["mds", "hf", "experiments"]
+provides-extras = ["mds", "hf", "rl", "experiments"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0" }]

@@ -71,6 +71,7 @@ from sklearn.base import BaseEstimator
 from sklearn.exceptions import ConvergenceWarning, NotFittedError
 
 from stable_finance.dataset.market import MarketData, market_quantity, requires
+from stable_finance.evaluation.config import REBALANCE_SOLVERS
 from stable_finance.evaluation.portfolio.construction import _per_decision_risk_aversion
 from stable_finance.evaluation.portfolio.contract import PortfolioWeights
 from stable_finance.evaluation.portfolio.risk import estimate_covariance
@@ -84,11 +85,6 @@ __all__ = [
     "allocate",
     "rebalance",
 ]
-
-#: The solvers, by name. ``"restart"`` is accelerated proximal gradient with
-#: adaptive restart in a variance-scaled metric, run until the step falls
-#: below ``tol``; ``"fista"`` is FISTA stopped at the ``max_iter`` budget.
-REBALANCE_SOLVERS = ("restart", "fista")
 
 #: The solver every rebalance uses unless told otherwise.
 DEFAULT_SOLVER = "restart"

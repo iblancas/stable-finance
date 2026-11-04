@@ -24,12 +24,19 @@ mds = [
 hf = [
     "huggingface-hub>=0.30",
 ]
+# For the Gymnasium adapter of the trading environment
+# (stable_finance.evaluation.trades.rl.gym). The environment itself needs
+# only numpy, and the library never imports this.
+rl = [
+    "gymnasium>=1.0",
+]
 # For the scripts under experiments/: result tables and figures. The library
 # itself never imports these.
 experiments = [
     "matplotlib>=3.9",
     "pandas>=2.3.0",
     "pyarrow>=17.0",
+    "torch>=2.0",
 ]
 
 [project.scripts]
@@ -54,3 +61,4 @@ packages = ["src/stable_finance"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
