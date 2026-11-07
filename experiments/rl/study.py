@@ -12,8 +12,9 @@ band; one that does has found a leak or is overfitting noise. And an arm's
 gain is shown beside the gross book it ran and its daily Sharpe, because the
 reward is risk-neutral, and holding more of a good position is not execution.
 
-    uv run --extra hf --extra mds --extra experiments python -m experiments.rl.study
-    uv run --extra experiments python -m experiments.rl.study --synthetic
+    uv run --extra hf --extra mds --extra rl-experiments python -m experiments.rl.study \\
+        --months 2020-07 2020-08
+    uv run --extra rl-experiments python -m experiments.rl.study --synthetic
 """
 
 from __future__ import annotations
@@ -40,9 +41,7 @@ from experiments.rl.coupling import NetLimit
 from experiments.rl.qlearning import explore, sweep
 
 OUT = Path(__file__).resolve().parent.parent / "results" / "rl"
-TRAIN, EVALUATE = "2020-07", "2020-08"
 HORIZON, EFQ, HALF_LIFE = 300, 0.7, 6
-PER_DAY = 78
 RATE_GRID = (0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0)
 BAND_GRID = (0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 10.0)
 
@@ -62,7 +61,7 @@ def make_env(panel: Panel, config: sf.BacktestConfig, **kwargs) -> sf.ExecutionE
 
 
 def synthetic_panels(seed: int = 0, *, n_assets: int = 100, train_days: int = 30,
-                     test_days: int = 20, ic: float = 0.03, per_day: int = PER_DAY,
+                     test_days: int = 20, ic: float = 0.03, per_day: int = 78,
                      volatility: float = 15e-4, half_spread: float = 2e-4,
                      keep: float = 0.9) -> tuple[Panel, Panel]:
     """A train and a test panel with a known signal: the ``target`` is what earns ``ic``.
@@ -72,6 +71,8 @@ def synthetic_panels(seed: int = 0, *, n_assets: int = 100, train_days: int = 30
     its signal. Alpha is therefore proportional to the target by construction,
     which real forecasts are not: this world can show that a learner works,
     not how much it would earn. Spreads wander with a half-life of a few hours.
+    ``per_day`` is how long this world's days are, there being no data to read
+    it from; nothing else in the study assumes a length of day.
     """
     rng = np.random.default_rng(seed)
     n_decisions = (train_days + test_days) * per_day
@@ -167,7 +168,7 @@ def require_no_leak(env: sf.ExecutionEnv, panel: Panel, *, most: float = 0.5) ->
 
 
 class ConstantRate:
-    """One rate for every name at every decision: partial adjustment."""
+    """:func:`~stable_finance.partial_adjustment`, step by step: the action is already its rate."""
 
     def __init__(self, rate: float) -> None:
         self.rate = float(rate)
@@ -177,18 +178,30 @@ class ConstantRate:
 
 
 class NoTradeBand:
-    """Inside ``width`` mean targets of the target do nothing; outside, trade to the edge."""
+    """:func:`~stable_finance.no_trade_band`, one decision at a time, from the book really held.
+
+    The library rule follows a path from where it says the book is. A limit
+    can cut an order, so here each decision starts from the position the
+    environment reports. ``width`` is in mean targets: the band's half-width in
+    weight is ``width`` times the target's mean absolute weight at the decision.
+    """
 
     def __init__(self, env: sf.ExecutionEnv, width: float) -> None:
         self.width = float(width)
+        self._target = env.name_features.index("target")
         self._gap = env.name_features.index("gap")
         self._gross = env.book_features.index("gross_target")
+        self._grid = (env.decisions[:1], env.assets, env.axis)
 
     def __call__(self, observation: dict) -> np.ndarray:
-        gap = np.abs(observation["names"][:, self._gap])
-        edge = self.width * observation["book"][self._gross] / len(gap)
+        goal = observation["names"][:, self._target]
+        gap = observation["names"][:, self._gap]
+        current = goal - gap
+        band = self.width * observation["book"][self._gross] / len(goal)
+        moved = sf.no_trade_band(sf.PortfolioWeights(goal[None, :, None], *self._grid), band,
+                                 initial=current[:, None]).values[0, :, 0]
         with np.errstate(invalid="ignore", divide="ignore"):
-            return np.where(gap > edge, 1.0 - edge / gap, 0.0)
+            return np.clip(np.where(gap != 0, (moved - current) / gap, 0.0), 0.0, 1.0)
 
 
 def _best(env, policies: dict) -> tuple:
@@ -213,7 +226,8 @@ def _by_day(values: np.ndarray, days: np.ndarray) -> np.ndarray:
 
 def score(episode: sf.Rollout, base: sf.Rollout, days: np.ndarray) -> dict:
     """What the harness says of an episode, in basis points, beside its gain over ``base``."""
-    card, = sf.implementation_shortfall(episode.target, episode.fills, episode.realized)
+    card, = sf.implementation_shortfall(episode.target, episode.fills, episode.realized,
+                                        fees=episode.fees)
     daily = _by_day(episode.net, days)
     gain = daily - _by_day(base.net, days)
     held = np.cumsum(episode.fills.quantity[:, :, 0], axis=0)
@@ -332,7 +346,8 @@ def show(title: str, arms: dict) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--synthetic", action="store_true", help="no data needed")
-    parser.add_argument("--months", nargs=2, default=(TRAIN, EVALUATE), metavar=("TRAIN", "TEST"))
+    parser.add_argument("--months", nargs=2, metavar=("TRAIN", "TEST"),
+                        help="YYYY-MM, needed unless --synthetic")
     parser.add_argument("--names", type=int, default=300)
     parser.add_argument("--ic", type=float, default=0.03)
     parser.add_argument("--seeds", type=int, default=3)
@@ -341,6 +356,8 @@ def main(argv=None) -> int:
     parser.add_argument("--limit", type=float, default=0.05)
     parser.add_argument("--no-dqn", action="store_true")
     args = parser.parse_args(argv)
+    if not args.synthetic and args.months is None:
+        parser.error("--months TRAIN TEST is needed unless --synthetic")
     OUT.mkdir(parents=True, exist_ok=True)
     config = sf.BacktestConfig(cost_model="cross", efq=EFQ, annualization="decisions")
     results = {}

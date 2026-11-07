@@ -277,11 +277,12 @@ env = ExecutionEnv(target, realized, market, days=days, config=config)
 episode = rollout(env, lambda observation: 0.3)          # any callable policy
 run_backtest(episode.weights, realized, market=market, days=days,
              config=config, with_series=True).series.net  # == episode.net
-implementation_shortfall(episode.target, episode.fills, episode.realized)
+implementation_shortfall(episode.target, episode.fills, episode.realized, fees=episode.fees)
 ```
 
 The reward is exactly a sum over names, so `step` also reports it name by
-name in `info["payoff"]`, and a learner can treat each name as an agent. A
+name in `info["payoff"]`, and a learner can treat each name as an agent. It is
+what the harness bills, fees included. A
 `ReplayBuffer` holds one row per name and decision, and `collect` is the way
 to fill it: it plays any callable in the environment and stores what the
 environment charged. An expert therefore supplies what it would trade and
@@ -295,9 +296,8 @@ episode that stops where the panel goes on is truncated, not terminated: the
 book carries overnight, so a learner keeps bootstrapping through the close.
 
 ```python
-from stable_finance import (
-    FollowPath, RatePerEpisode, ReplayBuffer, collect, row_features,
-)
+from stable_finance import ReplayBuffer, collect
+from stable_finance.evaluation.trades.rl import FollowPath, RatePerEpisode, row_features
 
 days_env = ExecutionEnv(target, realized, market, days=days, config=config,
                         episode_days=1)

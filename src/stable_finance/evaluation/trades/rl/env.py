@@ -32,13 +32,18 @@ from the portfolio stage; NaN in it is flat, as the harness reads it.
 
 THE REWARD is the harness's net return for the decision, in fractions of
 equity: what the book held after the decision's fills earned over the
-realized return, less what those fills paid over their reference price,
+realized return, less what those fills paid over their reference price and
+any fees the configuration bills on them,
 
-    net_t = sum_i held_t,i * r_t,i - sum_i q_t,i * (p_t,i - m_t,i) / m_t,i.
+    net_t = sum_i held_t,i * r_t,i - sum_i q_t,i * (p_t,i - m_t,i) / m_t,i - fees_t.
 
 The fills come from :func:`~stable_finance.evaluation.execution.execute`
-under the configuration's own cost model, so only what the fills paid is
-charged; no cost a policy believes in ever enters its reward. The policy
+under the configuration's own cost model and the fees from
+:func:`~stable_finance.evaluation.execution.fee_cost`, so only what the
+harness would bill is charged; no cost a policy believes in ever enters what
+it is charged. A fee is not shown to the policy, which learns it from the
+reward; a per-share fee, which differs with a name's price, it can learn only
+on average. The policy
 never sees the realized return, the arrival quotes or the execution window
 (see :mod:`~stable_finance.evaluation.trades.rl.features`).
 
@@ -118,14 +123,22 @@ from stable_finance.evaluation.config import DEFAULT_BACKTEST, BacktestConfig
 from stable_finance.evaluation.execution import (
     Fills,
     Orders,
-    _initial_positions,
     execute,
+    fee_cost,
+    initial_positions,
 )
 from stable_finance.evaluation.portfolio.contract import PortfolioWeights
+from stable_finance.evaluation.preparation import (
+    check_axes,
+    impact_schedule,
+    prepare,
+    share_price,
+)
 from stable_finance.evaluation.returns.contract import ForwardReturns
 from stable_finance.evaluation.trades.rl.features import decision_features, observable
 
-__all__ = ["BOOK_FEATURES", "REWARDS", "ExecutionEnv", "Payoff", "Rollout", "rollout"]
+__all__ = ["BOOK_FEATURES", "REWARDS", "ExecutionEnv", "Payoff", "Rollout", "rollout",
+           "start_episode"]
 
 _IMPACT = ("impact", "impact_stock")
 
@@ -142,8 +155,8 @@ class Payoff(NamedTuple):
 
     ``held`` is the position after the decision's fills, ``earned`` what that
     position earned over the realized return, ``paid`` what the fills paid
-    over their reference price, and ``paper`` what the target would have
-    earned, and ``gap`` what is left to the target. Summed over names,
+    over their reference price and in fees, ``paper`` what the target would
+    have earned, and ``gap`` what is left to the target. Summed over names,
     ``earned`` and ``paid`` are the gross return and the cost the harness
     books for the decision.
     """
@@ -176,10 +189,11 @@ class Rollout:
     was given and ``fills`` what executed, all on the episode's decisions,
     with ``realized`` the returns the episode was scored on. ``net``,
     ``gross`` and ``cost`` are the rewards and their two parts, one per
-    decision. ``run_backtest(weights, realized, ...)`` under the episode's
-    configuration reproduces ``net``, and
-    ``implementation_shortfall(target, fills, realized)`` splits what the
-    policy gave up against the target.
+    decision, and ``fees`` the part of ``cost`` billed beside the fills.
+    ``run_backtest(weights, realized, ...)`` under the episode's configuration
+    reproduces ``net``, and
+    ``implementation_shortfall(target, fills, realized, fees=fees)`` splits
+    what the policy gave up against the target.
     """
 
     target: PortfolioWeights
@@ -189,22 +203,13 @@ class Rollout:
     net: NDArray[np.float64]
     gross: NDArray[np.float64]
     cost: NDArray[np.float64]
+    fees: NDArray[np.float64]
 
 
 def _rows(market: MarketData, rows: slice) -> MarketData:
     """The market at a run of consecutive decisions."""
     return MarketData({k: v[rows] for k, v in market.columns.items()},
                       market.decisions[rows], market.assets, market.estimated)
-
-
-def _harness(target, realized, market, days, config, horizon_index):
-    """The harness's own checks and context, and the impact model's schedule."""
-    # Imported here: the backtest imports the trades stage, which imports this module.
-    from stable_finance.evaluation.backtest import _check_axes, _prepare, _schedule
-    _check_axes(config, market, target)
-    context = _prepare(target, realized, market, days, horizon_index)
-    schedule = _schedule(context, config) if config.cost_model in _IMPACT else 0
-    return context, schedule
 
 
 class ExecutionEnv:
@@ -253,7 +258,9 @@ class ExecutionEnv:
             raise ValueError("the environment supports holding='rebalanced' only")
         market = MarketData.empty(target.decisions, target.assets) if market is None else market
         require_market_aligned(market, target)
-        context, self.schedule = _harness(target, realized, market, days, config, horizon_index)
+        check_axes(config, market, target)
+        context = prepare(target, realized, market, days, horizon_index)
+        self.schedule = impact_schedule(context, config) if config.cost_model in _IMPACT else 0
 
         self.config = config
         self.market = market
@@ -263,7 +270,8 @@ class ExecutionEnv:
         n_decisions, n_assets = context["n_decisions"], context["n_assets"]
         self._target = np.nan_to_num(target.values[:, :, horizon_index], nan=0.0)
         self._outcome = context["outcome_values"]
-        self._initial = _initial_positions(None if initial is None else np.reshape(initial, (-1, 1)),
+        self._share_price = share_price(context, config)
+        self._initial = initial_positions(None if initial is None else np.reshape(initial, (-1, 1)),
                                            (n_assets, 1))[:, 0]
         self._held = self._initial.copy()
         self._committed = self._initial.copy()
@@ -501,8 +509,16 @@ class ExecutionEnv:
             slippage = np.where(q != 0, (price - reference) / reference, 0.0)
         goal = self._target[t]
         paper = np.where(finite, goal * returns, 0.0)
-        return Payoff(held, np.where(finite, held * returns, 0.0), q * slippage,
+        return Payoff(held, np.where(finite, held * returns, 0.0),
+                      q * slippage + self._fees(t, q),
                       np.broadcast_to(paper, held.shape), goal - held)
+
+    def _fees(self, rows: int | slice, q: NDArray) -> NDArray[np.float64]:
+        """The fees trades ``q`` at ``rows`` of the panel pay, by name, as the harness bills them."""
+        if not self.config.fees:
+            return np.zeros_like(q)
+        price = None if self._share_price is None else self._share_price[rows]
+        return fee_cost(q, price, **self.config.fees)
 
     def _observe(self) -> dict:
         """The state before the decision at ``_t``; past the panel, the last decision's market."""
@@ -534,6 +550,7 @@ class ExecutionEnv:
                         self._reference[:n, :, None], *axes),
             realized=ForwardReturns(self._outcome[rows, :, None], *axes),
             net=self._net[:n].copy(), gross=self._gross[:n].copy(), cost=self._cost[:n].copy(),
+            fees=self._fees(rows, self._quantity[:n]).sum(axis=1),
         )
 
 
@@ -545,7 +562,7 @@ def rollout(env: ExecutionEnv, policy, *, seed: int | None = None,
     begins, with the environment's generator, so one seed replays both.
     """
     observation, _ = env.reset(seed=seed, options=options)
-    _start_episode(policy, env)
+    start_episode(policy, env)
     ended = False
     while not ended:
         observation, _, terminated, truncated, _ = env.step(policy(observation))
@@ -553,7 +570,7 @@ def rollout(env: ExecutionEnv, policy, *, seed: int | None = None,
     return env.episode()
 
 
-def _start_episode(policy, env: ExecutionEnv) -> None:
+def start_episode(policy, env: ExecutionEnv) -> None:
     """Tell a policy that keeps state that an episode has begun, if it wants to know."""
     start = getattr(policy, "start", None)
     if start is not None:

@@ -20,7 +20,7 @@ export STABLE_FINANCE_CACHE=/path/with/space      # downloads and caches live he
 | 2. Real forecasts | `python -m experiments.signals` | `results/signals/{reversal_15m,ridge,lasso}.npz`, `ic_table.json` |
 | 3. Run a spec | `python -m experiments.run experiments/specs/<spec>.json --workers 4` | `results/<name>/rows.parquet`, `manifest.json`, `series.npz` |
 | 4. Learned policy | `python -m experiments.policy` | `results/policy/policy.json` |
-| 5. Learned execution | `python -m experiments.rl.study` (`--synthetic` needs no data) | `results/rl/study-*.json` |
+| 5. Learned execution | `python -m experiments.rl.study --months 2020-07 2020-08` (`--synthetic` needs no data; needs the `rl-experiments` extra) | `results/rl/study-*.json` |
 | 6. Stage costs | `python -m experiments.bench` (on an idle machine) | `results/bench/bench.json` |
 | 7. Figures | `python -m experiments.figures` | `results/figures/*-{light,dark}.png` |
 

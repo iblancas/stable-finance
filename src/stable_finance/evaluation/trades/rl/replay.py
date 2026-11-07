@@ -51,7 +51,7 @@ from stable_finance.evaluation.portfolio.contract import PortfolioWeights
 from stable_finance.evaluation.trades.rl.env import (
     REWARDS,
     ExecutionEnv,
-    _start_episode,
+    start_episode,
 )
 
 __all__ = ["FollowPath", "RandomRate", "RandomWalkRate", "RatePerEpisode", "ReplayBuffer",
@@ -302,7 +302,7 @@ def collect(env: ExecutionEnv, policy: Callable[[dict], ArrayLike], buffer: Repl
     for number, start_day in enumerate(plan):
         options = None if start_day is None else {"start_day": start_day}
         observation, _ = env.reset(seed=seed if number == 0 else None, options=options)
-        _start_episode(policy, env)
+        start_episode(policy, env)
         ended = False
         while not ended:
             rate = np.broadcast_to(np.asarray(policy(observation), dtype=np.float64), (n_assets,))

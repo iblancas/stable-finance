@@ -2827,7 +2827,6 @@ experiments = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pyarrow" },
-    { name = "torch" },
 ]
 hf = [
     { name = "huggingface-hub" },
@@ -2841,6 +2840,12 @@ mds = [
 ]
 rl = [
     { name = "gymnasium" },
+]
+rl-experiments = [
+    { name = "matplotlib" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "torch" },
 ]
 
 [package.dev-dependencies]
@@ -2860,11 +2865,12 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'mds'", specifier = ">=2.3.0" },
     { name = "pyarrow", marker = "extra == 'experiments'", specifier = ">=17.0" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
-    { name = "torch", marker = "extra == 'experiments'", specifier = ">=2.0" },
+    { name = "stable-finance", extras = ["experiments"], marker = "extra == 'rl-experiments'" },
+    { name = "torch", marker = "extra == 'rl-experiments'", specifier = ">=2.0" },
     { name = "tqdm", marker = "extra == 'mds'", specifier = ">=4.67.0" },
     { name = "zstandard", marker = "extra == 'mds'", specifier = ">=0.25.0" },
 ]
-provides-extras = ["mds", "hf", "rl", "experiments"]
+provides-extras = ["mds", "hf", "rl", "experiments", "rl-experiments"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0" }]

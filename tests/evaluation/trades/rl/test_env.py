@@ -24,7 +24,17 @@ CONFIGS = [
     BacktestConfig(cost_model="book", equity=1e6, annualization="decisions"),
     BacktestConfig(cost_model="impact", equity=1e6, execution_days=0.5, annualization="decisions"),
     BacktestConfig(cost_model="impact", equity=1e6, execution_days=0, annualization="decisions"),
+    # Fees are billed beside the fills, so nothing in a fill's price carries them.
+    BacktestConfig(cost_model="cross", efq=0.7, fee_bps=1.0, sec_fee_rate=22.1e-6,
+                   annualization="decisions"),
+    BacktestConfig(cost_model="cross", efq=0.7, fee_per_share=0.003, annualization="decisions"),
+    BacktestConfig(cost_model="impact", equity=1e6, execution_days=0.5, fee_bps=1.0,
+                   annualization="decisions"),
 ]
+
+
+def _name(config):
+    return f"{config.cost_model}-{config.execution_days}-{'-'.join(config.fees) or 'no-fees'}"
 
 
 def _env(world, config, **kwargs):
@@ -37,7 +47,7 @@ def _random_policy(seed):
     return lambda observation: rng.uniform(0, 1, size=len(observation["mask"]))
 
 
-@pytest.mark.parametrize("config", CONFIGS, ids=lambda c: f"{c.cost_model}-{c.execution_days}")
+@pytest.mark.parametrize("config", CONFIGS, ids=_name)
 def test_trading_to_the_target_is_the_harness(config):
     """THE POINT OF THE MODULE: eta = 1 everywhere is run_backtest on the target.
 
@@ -51,11 +61,12 @@ def test_trading_to_the_target_is_the_harness(config):
                           days=world["days"], config=config, with_series=True)
     np.testing.assert_allclose(episode.net, report.series.net, rtol=1e-12, atol=1e-15)
     np.testing.assert_allclose(episode.cost, report.series.cost, rtol=1e-12, atol=1e-15)
-    shortfall, = implementation_shortfall(episode.target, episode.fills, episode.realized)
+    shortfall, = implementation_shortfall(episode.target, episode.fills, episode.realized,
+                                          fees=episode.fees)
     np.testing.assert_allclose(shortfall.net, episode.net, rtol=1e-12, atol=1e-15)
 
 
-@pytest.mark.parametrize("config", CONFIGS, ids=lambda c: f"{c.cost_model}-{c.execution_days}")
+@pytest.mark.parametrize("config", CONFIGS, ids=_name)
 def test_any_policy_is_scored_by_the_harness_on_its_own_path(config):
     """Whatever the rates, the path traded toward reproduces the rewards in run_backtest."""
     world = quoted_world(seed=4)
@@ -64,6 +75,35 @@ def test_any_policy_is_scored_by_the_harness_on_its_own_path(config):
                           days=world["days"], config=config, with_series=True)
     np.testing.assert_allclose(episode.net, report.series.net, rtol=1e-12, atol=1e-15)
     np.testing.assert_allclose(episode.gross - episode.cost, episode.net, atol=1e-15)
+
+
+def test_a_fee_is_billed_on_what_was_traded_whatever_it_earned():
+    """One basis point on every unit traded, and nothing else about the episode moves."""
+    world = quoted_world(seed=6)
+    free = BacktestConfig(cost_model="cross", efq=0.7, annualization="decisions")
+    plain = rollout(_env(world, free), _random_policy(1))
+    billed = rollout(_env(world, free.replace(fee_bps=1.0)), _random_policy(1))
+    traded = np.abs(plain.fills.quantity[:, :, 0]).sum(axis=1)
+    np.testing.assert_allclose(billed.fees, traded * 1e-4, rtol=1e-12)
+    np.testing.assert_allclose(billed.cost, plain.cost + billed.fees, rtol=1e-12, atol=1e-15)
+    np.testing.assert_array_equal(billed.gross, plain.gross)
+    np.testing.assert_array_equal(plain.fees, 0.0)
+
+
+def test_fees_can_change_which_rate_is_best():
+    """Why a learner must be billed: the rate that earns most before fees is not the best after."""
+    world = quoted_world(seed=7, gaps=False)
+    free = BacktestConfig(cost_model="cross", efq=0.0, annualization="decisions")
+    target = world["target"]
+    # A target that earns a little on every flip, so trading it pays only while it is free.
+    world["realized"] = ForwardReturns(1e-4 * np.sign(target.values), target.decisions,
+                                       target.assets, target.horizons)
+
+    def net(config, rate):
+        return rollout(_env(world, config), lambda observation: rate).net.sum()
+
+    assert net(free, 1.0) > net(free, 0.1)
+    assert net(free.replace(fee_bps=5.0), 1.0) < net(free.replace(fee_bps=5.0), 0.1)
 
 
 def test_a_constant_rate_is_partial_adjustment():
@@ -244,7 +284,7 @@ def test_bad_actions_and_configurations_are_refused():
 UNSCHEDULED = [c for c in CONFIGS if c.cost_model != "impact" or c.execution_days == 0]
 
 
-@pytest.mark.parametrize("config", CONFIGS, ids=lambda c: f"{c.cost_model}-{c.execution_days}")
+@pytest.mark.parametrize("config", CONFIGS, ids=_name)
 def test_the_payoff_by_name_is_the_books_reward(config):
     """The reward splits exactly by name, which is what lets a name be an agent."""
     world = quoted_world(seed=5)
@@ -262,7 +302,8 @@ def test_the_payoff_by_name_is_the_books_reward(config):
         shortfall.append(-payoff.reward("shortfall").sum())
         ended = terminated or truncated
     episode = env.episode()
-    scorecard, = implementation_shortfall(episode.target, episode.fills, episode.realized)
+    scorecard, = implementation_shortfall(episode.target, episode.fills, episode.realized,
+                                          fees=episode.fees)
     np.testing.assert_allclose(shortfall, scorecard.shortfall, rtol=1e-12, atol=1e-15)
     with pytest.raises(ValueError, match="reward"):
         payoff.reward("sharpe")

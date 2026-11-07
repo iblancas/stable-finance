@@ -36,6 +36,12 @@ experiments = [
     "matplotlib>=3.9",
     "pandas>=2.3.0",
     "pyarrow>=17.0",
+]
+# For the learners under experiments/rl/, which need torch. Apart from
+# `experiments`, so that an experiments install does not pull a GPU stack, and
+# from `rl`, so that the Gymnasium adapter does not either.
+rl-experiments = [
+    "stable-finance[experiments]",
     "torch>=2.0",
 ]
 

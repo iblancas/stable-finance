@@ -9,14 +9,8 @@ torch = pytest.importorskip("torch")
 from experiments.rl.coupling import NetLimit
 from experiments.rl.dqn import Agent, Inputs, train
 from experiments.rl.study import ConstantRate, NoTradeBand, make_env, synthetic_panels
-from stable_finance import (
-    BacktestConfig,
-    Transitions,
-    name_rows,
-    rollout,
-    row_features,
-    run_backtest,
-)
+from stable_finance import BacktestConfig, rollout, run_backtest
+from stable_finance.evaluation.trades.rl import Transitions, name_rows, row_features
 
 CROSS = BacktestConfig(cost_model="cross", efq=1.0, annualization="decisions")
 MID = BacktestConfig(cost_model="mid", annualization="decisions")

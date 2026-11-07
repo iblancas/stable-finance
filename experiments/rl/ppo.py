@@ -29,13 +29,8 @@ from torch import nn
 
 from experiments.rl.dqn import Inputs
 from experiments.rl.qlearning import RATES
-from stable_finance import (
-    RatePerEpisode,
-    ReplayBuffer,
-    collect,
-    name_rows,
-    row_features,
-)
+from stable_finance import ReplayBuffer, collect
+from stable_finance.evaluation.trades.rl import RatePerEpisode, name_rows, row_features
 
 
 def advantages(rewards: NDArray, values: NDArray, final: NDArray, *, alive: bool,

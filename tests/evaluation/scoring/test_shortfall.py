@@ -167,6 +167,34 @@ def test_orders_are_scored_against_every_order_filled():
     np.testing.assert_allclose(result.gap, [0.5, 0.5])
 
 
+def _scored():
+    world = _world()
+    fills = fill_path(world["target"], world["market"], model="cross", efq=0.7)
+    return world["target"], fills, world["realized"]
+
+
+def test_fees_are_a_line_of_their_own():
+    """They come off the net, and neither execution nor opportunity moves."""
+    target, fills, realized = _scored()
+    plain, = implementation_shortfall(target, fills, realized)
+    fees = np.linspace(1e-5, 2e-5, len(plain.net))
+    billed, = implementation_shortfall(target, fills, realized, fees=fees)
+    np.testing.assert_array_equal(billed.execution, plain.execution)
+    np.testing.assert_array_equal(billed.opportunity, plain.opportunity)
+    np.testing.assert_array_equal(billed.fees, fees)
+    np.testing.assert_allclose(billed.net, plain.net - fees)
+    np.testing.assert_allclose(billed.shortfall, billed.paper - billed.net, atol=1e-15)
+    np.testing.assert_array_equal(plain.fees, 0.0)
+
+
+def test_fees_that_cannot_be_read_are_refused():
+    target, fills, realized = _scored()
+    with pytest.raises(ValueError, match="shape"):
+        implementation_shortfall(target, fills, realized, fees=np.zeros(2))
+    with pytest.raises(ValueError, match="non-negative"):
+        implementation_shortfall(target, fills, realized, fees=-np.ones(len(target.decisions)))
+
+
 def test_market_data_and_an_array_give_the_same_efq():
     world = _world(seed=1)
     fills = fill_path(world["target"], world["market"], efq=0.55)

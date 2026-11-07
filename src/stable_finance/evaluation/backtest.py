@@ -48,7 +48,6 @@ from stable_finance.evaluation.config import (
     DEFAULT_BACKTEST,
     OPTIONAL_SETTINGS,
     BacktestConfig,
-    check_config,
 )
 from stable_finance.evaluation.embeddings.contract import Embeddings
 from stable_finance.evaluation.execution import (
@@ -73,6 +72,13 @@ from stable_finance.evaluation.portfolio.risk import apply_screen, estimate_risk
 from stable_finance.evaluation.portfolio.signals import (
     NEUTRALIZATIONS, SIGNAL_REQUIRES, alpha_from_rule, apply_signal, estimate_beta,
     estimate_loadings, industry_exposures,
+)
+from stable_finance.evaluation.preparation import (
+    check_axes,
+    decisions_spanning,
+    impact_schedule,
+    prepare,
+    share_price,
 )
 from stable_finance.evaluation.returns.contract import ForwardReturns
 from stable_finance.evaluation.returns.probes import RidgeProbe
@@ -243,16 +249,6 @@ class BacktestReport:
 
 # ── shared setup ────────────────────────────────────────────────────────────
 
-def _day_index(days: ArrayLike | None, n_decisions: int) -> NDArray[np.int64]:
-    """Map each decision to a day, defaulting to one day per decision."""
-    if days is None:
-        return np.arange(n_decisions, dtype=np.int64)
-    labels = np.asarray(days).ravel()
-    if len(labels) != n_decisions:
-        raise ValueError(f"days must have length {n_decisions}, got {len(labels)}")
-    _, index = np.unique(labels, return_inverse=True)
-    return index.astype(np.int64)
-
 
 def _market(like, market, half_spread) -> MarketData:
     """The market data a run is checked against.
@@ -274,40 +270,6 @@ def _market(like, market, half_spread) -> MarketData:
         return MarketData({"half_spread": spread}, like.decisions, like.assets)
     require_market_aligned(market, like)
     return market
-
-
-def _prepare(like, realized, market: MarketData, days, horizon_index) -> dict:
-    """Everything downstream needs that no configuration can change.
-
-    ``like`` is the input on the grid: a forecast, whose values are ``mu``, or
-    weights or orders, which have no forecast and so no ``mu``.
-    """
-    for axis in ("decisions", "assets", "horizons"):
-        if not np.array_equal(getattr(like, axis), getattr(realized, axis)):
-            raise ValueError(f"{axis} of the input and the realized returns are not aligned")
-    n_decisions, n_assets, _ = like.values.shape
-    # None, not NaN, when the market has no spread: NaN is a name that was not
-    # quoting, and reading a missing column that way would screen out the
-    # whole universe instead of trading it frictionlessly.
-    spread = market.get("half_spread") if market.has("half_spread") else None
-    horizon = int(like.horizons[horizon_index])
-    axis = np.asarray([horizon])
-    outcome_values = realized.values[:, :, horizon_index]
-    return {
-        "mu": (like.values[:, :, horizon_index] if isinstance(like, ForwardReturns)
-               else None),
-        "market": market,
-        "outcome_values": outcome_values,
-        "outcome": ForwardReturns(outcome_values[:, :, None], realized.decisions,
-                                  realized.assets, axis),
-        "spread": spread, "axis": axis, "horizon": horizon,
-        "decisions": like.decisions, "assets": like.assets,
-        "day": _day_index(days, n_decisions),
-        # what the caller called each decision's day (else the decision itself), for the P&L series
-        "day_labels": np.asarray(days).ravel() if days is not None else np.asarray(like.decisions),
-        "days_given": days is not None,
-        "n_decisions": n_decisions, "n_assets": n_assets,
-    }
 
 
 def _history_panel(context, history, realized) -> ForwardReturns:
@@ -522,12 +484,7 @@ def _cost(config: BacktestConfig, spread, shape, *, context=None,
     cost = _model_cost(config, spread, shape, context=context, target=target)
     if not config.fees:
         return cost
-    return cost + fee_per_unit(_share_price(context, config), **config.fees)
-
-
-def _share_price(context: dict, config: BacktestConfig) -> NDArray[np.float64] | None:
-    """The share price a per-share fee is converted at: the mid, else not needed."""
-    return context["market"].get("mid") if config.fee_per_share is not None else None
+    return cost + fee_per_unit(share_price(context, config), **config.fees)
 
 
 def _model_cost(config: BacktestConfig, spread, shape, *, context=None,
@@ -587,50 +544,7 @@ def causal_risk_aversion(mu: ArrayLike, sigma: ArrayLike,
     return np.maximum(expanding / gross_exposure, 1e-12)
 
 
-def _decision_seconds(context: dict) -> float:
-    """The spacing between consecutive decisions on one day, in seconds.
 
-    Read from the decisions themselves: epoch seconds, as
-    :func:`~stable_finance.evaluation.inputs.evaluation_inputs` takes them, or
-    the ``"date|anchor"`` labels the Market-1T readers write, whose anchor is
-    seconds past the session's origin. The median gap within a day is used,
-    so overnight gaps and an occasional missing decision do not count.
-    """
-    decisions = np.asarray(context["decisions"])
-    try:
-        stamps = decisions.astype(np.float64)
-    except (TypeError, ValueError):
-        parts = np.char.partition(decisions.astype(str), "|")
-        if not np.all(parts[:, 1] == "|"):
-            raise ValueError("this needs the decisions' times: pass decisions as epoch "
-                             "seconds or 'date|anchor' labels") from None
-        stamps = parts[:, 2].astype(np.float64)
-    gaps = np.diff(stamps)
-    if context["days_given"]:
-        day = context["day"]
-        gaps = gaps[day[1:] == day[:-1]]
-    gaps = gaps[gaps > 0]
-    if len(gaps) == 0:
-        raise ValueError("need two decisions on one day to measure their spacing; "
-                         "pass days labelling each decision's trading day")
-    return float(np.median(gaps))
-
-
-def _decisions_spanning(context: dict, *, seconds: float | None = None,
-                        days: float | None = None) -> int:
-    """How many decisions a span of time covers: the one time-to-decisions rule.
-
-    A span in ``days`` is that many times the decisions the data has in a
-    day, read from the ``days`` labels (the impact model's schedule). A span
-    in ``seconds`` is that over the spacing of the decisions (a held book's
-    horizon). Both round to the nearest whole decision.
-    """
-    if days is not None:
-        if not context["days_given"]:
-            raise ValueError("a span in days needs days labelling each decision's trading day")
-        per_day = float(np.median(np.bincount(context["day"])))
-        return int(round(days * per_day))
-    return max(round(float(seconds) / _decision_seconds(context)), 1)
 
 
 def _formations(context: dict) -> NDArray[np.bool_]:
@@ -646,7 +560,7 @@ def _formations(context: dict) -> NDArray[np.bool_]:
         if context["horizon"] <= 0:
             raise ValueError("rebalance='horizon' needs a horizon of fixed length; a book "
                              "held to the close is already set once a day (rebalance='daily')")
-        every = _decisions_spanning(context, seconds=context["horizon"])
+        every = decisions_spanning(context, seconds=context["horizon"])
         day = context["day"]
         index = np.arange(len(day))
         if context["days_given"]:
@@ -710,7 +624,7 @@ def _fills_toward(context: dict, values: NDArray[np.float64], config: BacktestCo
         # Every order completes, so there is nothing to chase: the orders are
         # the target's moves, each worked over its schedule.
         return execute(orders_from_weights(target), context["market"], model=config.cost_model,
-                       equity=config.equity, schedule=_schedule(context, config),
+                       equity=config.equity, schedule=impact_schedule(context, config),
                        impact=config.impact)
     # Otherwise chase the target from what is really held: a name that is
     # not priced at a decision is held, not moved for free.
@@ -722,22 +636,6 @@ def _fills_toward(context: dict, values: NDArray[np.float64], config: BacktestCo
 def _drift(context: dict, config: BacktestConfig):
     """The decision-to-decision returns positions move with, under drift holding; else None."""
     return context["outcome"].values if config.holding == "drift" else None
-
-
-def _schedule(context: dict, config: BacktestConfig) -> int:
-    """How many decisions the impact model works an order over.
-
-    One trading day is however many decisions the data has in a day, read
-    from the ``days`` labels; a run without them cannot say what a day is.
-    The default is two days, about the horizon of the paper's own trades.
-    """
-    days = 2.0 if config.execution_days is None else config.execution_days
-    if days == 0:
-        return 0
-    if not context["days_given"]:
-        raise ValueError(f"cost_model={config.cost_model!r} works orders over execution_days, so it "
-                         "needs days labelling each decision's trading day")
-    return _decisions_spanning(context, days=days)
 
 
 def _score_fills(context: dict, fills, config: BacktestConfig, *,
@@ -764,7 +662,7 @@ def _score_fills(context: dict, fills, config: BacktestConfig, *,
         # Fees are billed on the quantity each fill actually traded, beside
         # its slippage rather than inside its price (see the execution
         # module), so cost is still exactly slippage plus fees.
-        fees = fee_cost(quantity, _share_price(context, config), **config.fees).sum(axis=1)
+        fees = fee_cost(quantity, share_price(context, config), **config.fees).sum(axis=1)
         costs = costs + fees
     return _report(context, config, gross, costs, np.abs(quantity), positions,
                    with_series=with_series, alpha=alpha, sigma=sigma, fees=fees)
@@ -892,18 +790,6 @@ def _check_exposure(kind: str | None, market: MarketData) -> None:
     market.require(*SIGNAL_REQUIRES[kind], purpose=f"with_exposure={kind!r}")
 
 
-def _check_axes(config: BacktestConfig, market: MarketData, source) -> None:
-    """Check the axes a level uses; below the forecast only trading remains."""
-    if isinstance(source, ForwardReturns):
-        check_config(config, market)
-    else:
-        if config.factor_limit is not None:
-            raise ValueError("factor_limit builds a target from forecasts; for weights or "
-                             "orders pass with_exposure to report held exposures")
-        check_config(config.replace(universe="all", alpha=None, alpha_ic=None,
-                                    neutralize=None), market)
-
-
 def run_backtest(
     forecast,
     realized: ForwardReturns,
@@ -995,9 +881,9 @@ def run_backtest(
         raise ValueError(f"unfilled must be 'retry' or 'cancel', not {unfilled!r}")
     if config.holding == "drift" and config.cost_model not in ("mid", "cross"):
         raise ValueError("holding='drift' is supported for the mid and cross cost models")
-    _check_axes(config, market, source)
+    check_axes(config, market, source)
     _check_exposure(with_exposure, market)
-    context = _prepare(source, realized, market, days, horizon_index)
+    context = prepare(source, realized, market, days, horizon_index)
     _exposures(context, config.factor_exposure, history, realized)
     _exposures(context, with_exposure, history, realized)
     context["with_exposure"] = with_exposure
@@ -1028,7 +914,7 @@ def run_backtest(
     else:
         fills = execute(orders, market, model=config.cost_model, efq=context.get("efq", config.efq),
                         equity=config.equity, impact=config.impact,
-                        schedule=(_schedule(context, config)
+                        schedule=(impact_schedule(context, config)
                                   if config.cost_model in ("impact", "impact_stock") else 0))
     return _score_fills(context, fills, config, with_series=with_series)
 
@@ -1083,7 +969,7 @@ def sweep_configs(
     configs = tuple(configs)
     if on_error == "raise":
         for config in configs:
-            _check_axes(config, market, source)
+            check_axes(config, market, source)
     else:
         configs = tuple(c for c in configs if c.supported_by(market))
     _check_exposure(with_exposure, market)
@@ -1099,7 +985,7 @@ def sweep_configs(
                 if on_error == "raise":
                     raise
         return tuple(reports)
-    context = _prepare(source, realized, market, days, horizon_index)
+    context = prepare(source, realized, market, days, horizon_index)
     _exposures(context, with_exposure, history, realized)
     context["with_exposure"] = with_exposure
     # The risk cache is tiny (one matrix per risk model) and kept whole. The

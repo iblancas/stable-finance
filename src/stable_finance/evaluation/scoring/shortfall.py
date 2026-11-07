@@ -8,9 +8,9 @@ Portfolio Management 14(3):4-9) separates them by comparing the book against a
 PAPER PORTFOLIO: one that holds the target at every decision, filled in full
 and for free at the price the realized return is measured from. The
 implementation shortfall is the paper return minus the real one, and it
-splits exactly in two:
+splits exactly:
 
-    shortfall_t   = paper_t - net_t = execution_t + opportunity_t
+    shortfall_t   = paper_t - net_t = execution_t + fees_t + opportunity_t
     execution_t   = sum_i q_t,i * (p_t,i - m_t,i) / m_t,i
     opportunity_t = sum_i (target_t,i - held_t,i) * r_t,i
 
@@ -21,15 +21,18 @@ travelled there), the depth walked under ``book``, the impact under
 portfolio earned on the part of the target the real book did not hold: an
 order that did not fill, an impact slice still being worked, a name that
 stopped quoting. Under the impact model, the price move while an order is
-worked lands here, because the position lags the target while it moves.
+worked lands here, because the position lags the target while it moves. FEES
+are billed beside a fill, not in its price, so they cannot be read from the
+fills: they are handed in, as :func:`~stable_finance.evaluation.execution.fee_cost`
+bills them, and are zero otherwise.
 
 THE ACCOUNTING IS THE HARNESS'S. Positions come from
 :func:`~stable_finance.evaluation.scoring.pnl.positions_from_fills`, each fill
 is charged ``q (p - m) / m`` as in :func:`~stable_finance.run_backtest`, and a
 decision at which no name has a realized return earns nothing. So ``net`` here
-is the harness's net return for the same fills, decision by decision, and a
-shortfall always reconciles with the Sharpe it is reported beside. Only what
-the fills paid is charged; a cost a policy assumed when choosing its trades
+is the harness's net return for the same fills and fees, decision by decision,
+and a shortfall reconciles with the Sharpe it is reported beside. Only what the
+book was billed is charged; a cost a policy assumed when choosing its trades
 never enters.
 
 The scorecard takes the target the fills were chasing, not a forecast, so it
@@ -46,7 +49,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from stable_finance.dataset.market import MarketData, market_quantity, requires
 from stable_finance.evaluation._grid import require_aligned
-from stable_finance.evaluation.execution import Fills, Orders, _initial_positions
+from stable_finance.evaluation.execution import Fills, Orders, initial_positions
 from stable_finance.evaluation.portfolio.contract import PortfolioWeights
 from stable_finance.evaluation.returns.contract import ForwardReturns
 from stable_finance.evaluation.scoring.pnl import positions_from_fills
@@ -60,8 +63,9 @@ class ImplementationShortfall:
 
     Every series has one value per decision, in fractions of equity:
     ``paper`` is what the target earned, ``gross`` what the held book earned,
-    ``execution`` what the fills paid and ``opportunity`` what the gap to the
-    target lost. ``traded`` is the two-way traded weight, the sum over names of
+    ``execution`` what the fills paid, ``fees`` what was billed beside them and
+    ``opportunity`` what the gap to the target lost. ``traded`` is the two-way
+    traded weight, the sum over names of
     the absolute fill, and ``gap`` the gross weight still away from the target
     after each decision's fills.
 
@@ -81,6 +85,7 @@ class ImplementationShortfall:
     paper: NDArray[np.float64]
     gross: NDArray[np.float64]
     execution: NDArray[np.float64]
+    fees: NDArray[np.float64]
     opportunity: NDArray[np.float64]
     traded: NDArray[np.float64]
     gap: NDArray[np.float64]
@@ -89,13 +94,13 @@ class ImplementationShortfall:
 
     @property
     def net(self) -> NDArray[np.float64]:
-        """The held book's return after what its fills paid."""
-        return self.gross - self.execution
+        """The held book's return after what its fills paid and any fees."""
+        return self.gross - self.execution - self.fees
 
     @property
     def shortfall(self) -> NDArray[np.float64]:
-        """The paper return minus the net one: execution plus opportunity."""
-        return self.execution + self.opportunity
+        """The paper return minus the net one: execution, fees and opportunity."""
+        return self.execution + self.fees + self.opportunity
 
     @property
     def execution_bps(self) -> float:
@@ -127,6 +132,7 @@ def implementation_shortfall(
     half_spread: ArrayLike | MarketData | None = None,
     initial: ArrayLike | None = None,
     drift: bool = False,
+    fees: ArrayLike | None = None,
 ) -> tuple[ImplementationShortfall, ...]:
     """Split the gap between a target and its fills into execution and opportunity.
 
@@ -145,6 +151,10 @@ def implementation_shortfall(
     carrying one) is the quoted half-spread at each decision, read only for
     ``realized_efq``; without it that is NaN.
 
+    ``fees`` is what the book was billed beside its fills, one value per
+    decision (or ``(n_decisions, n_horizons)``), as a run charging fees bills
+    them; left out, ``net`` is before fees.
+
     One result is returned per horizon, as by
     :func:`~stable_finance.evaluation.scoring.pnl.evaluate_fills`.
     """
@@ -161,7 +171,18 @@ def implementation_shortfall(
         if np.any(np.isfinite(spread) & (spread < 0)):
             raise ValueError("half_spread cannot be negative")
 
-    start = _initial_positions(initial, (n_assets, n_horizons))
+    billed = np.zeros((n_decisions, n_horizons))
+    if fees is not None:
+        given = np.asarray(fees, dtype=np.float64)
+        try:
+            billed = np.broadcast_to(given[:, None] if given.ndim == 1 else given, billed.shape)
+        except ValueError:
+            raise ValueError(f"fees must have shape {(n_decisions,)} or "
+                             f"{billed.shape}, got {given.shape}") from None
+        if not np.isfinite(billed).all() or (billed < 0).any():
+            raise ValueError("fees must be finite and non-negative")
+
+    start = initial_positions(initial, (n_assets, n_horizons))
     aim = _paper_path(target, start)
     held = positions_from_fills(
         fills, initial=start, drift=realized.values if drift else None).values
@@ -200,6 +221,7 @@ def implementation_shortfall(
             paper=paper,
             gross=gross,
             execution=charged[:, :, h].sum(axis=1),
+            fees=billed[:, h].copy(),
             opportunity=opportunity,
             traded=np.abs(quantity).sum(axis=1),
             gap=left.sum(axis=1),

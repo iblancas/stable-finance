@@ -38,11 +38,10 @@ from numpy.typing import NDArray
 from torch import nn
 
 from experiments.rl.qlearning import RATES
-from stable_finance import (
+from stable_finance import ReplayBuffer, collect
+from stable_finance.evaluation.trades.rl import (
     RatePerEpisode,
-    ReplayBuffer,
     Transitions,
-    collect,
     name_rows,
     row_features,
 )

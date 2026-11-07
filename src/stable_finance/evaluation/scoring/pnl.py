@@ -13,7 +13,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from stable_finance.evaluation._grid import require_aligned
-from stable_finance.evaluation.execution import Fills, _initial_positions
+from stable_finance.evaluation.execution import Fills, initial_positions
 from stable_finance.dataset.market import (
     MarketData,
     market_quantity,
@@ -104,7 +104,7 @@ def positions_from_fills(
     (``holding="drift"``).
     """
     n_decisions, n_assets, n_horizons = fills.quantity.shape
-    start = _initial_positions(initial, (n_assets, n_horizons))
+    start = initial_positions(initial, (n_assets, n_horizons))
     if drift is None:
         positions = start[None] + np.cumsum(fills.quantity, axis=0)
     else:

@@ -118,6 +118,7 @@ __all__ = [
     "impact_cost",
     "impact_stock_cost",
     "execution_requires",
+    "initial_positions",
     "fill_path",
     "fill_requires",
     "orders_from_weights",
@@ -361,7 +362,8 @@ class Fills:
         object.__setattr__(self, "horizons", contract.horizons)
 
 
-def _initial_positions(initial: ArrayLike | None, shape: tuple[int, int]) -> np.ndarray:
+def initial_positions(initial: ArrayLike | None, shape: tuple[int, int]) -> np.ndarray:
+    """The book held before the first decision: flat by default, else ``initial`` broadcast."""
     if initial is None:
         return np.zeros(shape, dtype=np.float64)
     array = np.asarray(initial, dtype=np.float64)
@@ -395,7 +397,7 @@ def orders_from_weights(
     """
     target = np.nan_to_num(weights.values, nan=0.0)
     n_decisions, n_assets, n_horizons = target.shape
-    start = _initial_positions(initial, (n_assets, n_horizons))
+    start = initial_positions(initial, (n_assets, n_horizons))
     previous = np.concatenate([start[None], target[:-1]], axis=0)
     return Orders(
         target - previous, weights.decisions, weights.assets, weights.horizons,
@@ -832,7 +834,7 @@ def fill_path(weights: PortfolioWeights, market: MarketData | None = None, *,
         require_market_aligned(market, weights)
     target = np.nan_to_num(weights.values, nan=0.0)
     n_decisions, n_assets, n_horizons = target.shape
-    held = _initial_positions(initial, (n_assets, n_horizons))
+    held = initial_positions(initial, (n_assets, n_horizons))
     efq = np.broadcast_to(_efq_array(efq if model == "cross" else 0.0), (n_decisions, n_assets))
     if drift is not None:
         if model not in ("mid", "cross") or limit is not None:

@@ -9,13 +9,12 @@ from experiments.rl.coupling import NetLimit
 from stable_finance import (
     BacktestConfig,
     ExecutionEnv,
-    RandomRate,
     ReplayBuffer,
     collect,
     rollout,
-    row_features,
     run_backtest,
 )
+from stable_finance.evaluation.trades.rl import RandomRate, row_features
 
 MID = BacktestConfig(cost_model="mid", annualization="decisions")
 CROSS = BacktestConfig(cost_model="cross", efq=0.7, annualization="decisions")

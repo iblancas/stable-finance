@@ -9,13 +9,14 @@ from experiments.rl.study import (
     NoTradeBand,
     _pool,
     compare,
+    main,
     make_env,
     score,
     synthetic_panels,
     tuned_band,
     tuned_rate,
 )
-from stable_finance import BacktestConfig, rollout
+from stable_finance import BacktestConfig, no_trade_band, partial_adjustment, rollout
 
 CROSS = BacktestConfig(cost_model="cross", efq=1.0, annualization="decisions")
 MID = BacktestConfig(cost_model="mid", annualization="decisions")
@@ -37,6 +38,27 @@ def test_a_band_holds_inside_and_trades_to_its_edge_outside():
         inside = np.abs(before) <= edge
         np.testing.assert_allclose(after[inside], before[inside])
         np.testing.assert_allclose(np.abs(after[~inside]), edge)
+
+
+def test_the_band_is_the_librarys_rule_played_a_decision_at_a_time():
+    """One band, not two: where every order fills, the two follow the same path."""
+    train, _ = synthetic_panels(2, **SMALL)
+    env = make_env(train, MID)
+    played = rollout(env, NoTradeBand(env, 1.5)).weights.values
+    mean_target = np.abs(train.target.values[:, :, 0]).mean(axis=1, keepdims=True)
+    rule = no_trade_band(train.target, 1.5, cost_belief=mean_target).values
+    np.testing.assert_allclose(played, rule, atol=1e-12)
+
+
+def test_a_constant_rate_is_the_librarys_partial_adjustment():
+    train, _ = synthetic_panels(2, **SMALL)
+    played = rollout(make_env(train, MID), ConstantRate(0.2)).weights.values
+    np.testing.assert_allclose(played, partial_adjustment(train.target, 0.2).values, atol=1e-12)
+
+
+def test_real_data_is_told_its_months():
+    with pytest.raises(SystemExit):
+        main([])
 
 
 def test_a_band_of_no_width_trades_to_the_target():

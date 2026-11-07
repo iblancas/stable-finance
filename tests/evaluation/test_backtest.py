@@ -27,6 +27,7 @@ from stable_finance import (
 )
 from stable_finance.evaluation import backtest as bt
 from stable_finance.evaluation.backtest import causal_risk_aversion
+from stable_finance.evaluation.preparation import prepare
 
 ASSETS = [f"A{i}" for i in range(6)]
 AXIS = np.array([900])
@@ -241,9 +242,9 @@ def test_the_factor_model_reads_the_market_industry_codes_when_there_are_some():
     codes[40:, 5] = 1.0    # a reclassification later in the period is not read
     market = MarketData({"industry": codes}, w["forecast"].decisions, ASSETS)
     config = FRICTIONLESS.replace(weighting="min_var", risk_model="factor")
-    plain = bt._prepare(w["forecast"], w["realized"], MarketData.empty(
+    plain = prepare(w["forecast"], w["realized"], MarketData.empty(
         w["forecast"].decisions, ASSETS), None, 0)
-    coded = bt._prepare(w["forecast"], w["realized"], market, None, 0)
+    coded = prepare(w["forecast"], w["realized"], market, None, 0)
     np.testing.assert_array_equal(bt._risk(plain, config, w["history"], w["realized"], None, 0),
                                   factor_covariance(w["history"])[0])
     np.testing.assert_array_equal(
@@ -849,7 +850,7 @@ def test_an_industry_neutral_book_runs_on_a_market_with_industry_codes():
     codes = np.tile([1.0, 1.0, 1.0, 2.0, 2.0, 2.0], (80, 1))
     market = MarketData({"industry": codes}, w["forecast"].decisions, ASSETS)
     config = FRICTIONLESS.replace(risk_model="diagonal", neutralize="industry")
-    context = bt._prepare(w["forecast"], w["realized"], market, None, 0)
+    context = prepare(w["forecast"], w["realized"], market, None, 0)
     sigma = bt._risk(context, config, w["history"], w["realized"], None, 0)
     assert np.all(np.isfinite(bt._weights(context, config, sigma)))
     report = run_backtest(w["forecast"], w["realized"], market=market,
@@ -953,7 +954,7 @@ def test_a_held_book_is_scored_against_the_forecast_it_was_formed_on():
     setup = held_world(unknown=k >= 6)
     report = run_backtest(**setup, config=HELD)
     market = MarketData({"half_spread": setup["half_spread"]}, setup["forecast"].decisions, ASSETS)
-    context = bt._prepare(setup["forecast"], setup["realized"], market, setup["days"], 0)
+    context = prepare(setup["forecast"], setup["realized"], market, setup["days"], 0)
     sigma = bt._risk(context, HELD, setup["history"], setup["realized"], None, 0)
     mu = setup["forecast"].values[:, :, 0]
     weights = weight_book("equal", select_book("all", mu, np.ones(mu.shape, bool)), mu,
