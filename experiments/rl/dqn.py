@@ -47,7 +47,8 @@ from stable_finance.evaluation.trades.rl import (
 )
 
 #: Features that turn over with the side of the book, so a long and a short are one case.
-SIGNED = ("held", "target", "gap", "in_flight", "imbalance", "last_return", "forecast")
+SIGNED = ("held", "target", "gap", "in_flight", "imbalance", "last_return", "forecast",
+          "net_held")
 
 
 class Inputs:

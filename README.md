@@ -282,7 +282,10 @@ implementation_shortfall(episode.target, episode.fills, episode.realized, fees=e
 
 The reward is exactly a sum over names, so `step` also reports it name by
 name in `info["payoff"]`, and a learner can treat each name as an agent. It is
-what the harness bills, fees included. A
+what the harness bills, fees included, and it is risk-neutral;
+`trades.rl.mean_variance_reward(covariance, risk_aversion)` makes a reward that
+also charges the book's variance, split by name, as a preference that shapes
+training and is never billed. A
 `ReplayBuffer` holds one row per name and decision, and `collect` is the way
 to fill it: it plays any callable in the environment and stores what the
 environment charged. An expert therefore supplies what it would trade and

@@ -5,10 +5,12 @@ import numpy as np
 import pytest
 
 from experiments.rl.study import (
+    RATE_GRID,
     ConstantRate,
     NoTradeBand,
     _pool,
     compare,
+    implied_risk,
     main,
     make_env,
     score,
@@ -56,6 +58,93 @@ def test_a_constant_rate_is_the_librarys_partial_adjustment():
     np.testing.assert_allclose(played, partial_adjustment(train.target, 0.2).values, atol=1e-12)
 
 
+def test_the_implied_risk_aversion_makes_the_targets_size_the_best_one():
+    train, _ = synthetic_panels(3, **SMALL)
+    risk = implied_risk(train)
+    weights, mu = train.target.values[:, :, 0], train.forecast.values[:, :, 0]
+
+    def utility(k):
+        return (k * weights * mu).sum(axis=1).mean() - risk.penalty(k * weights).mean()
+
+    sizes = np.linspace(0.5, 1.5, 101)
+    assert sizes[np.argmax([utility(k) for k in sizes])] == pytest.approx(1.0)
+
+
+def test_a_forecast_with_no_edge_implies_no_risk_aversion():
+    train, _ = synthetic_panels(3, ic=0.0, **SMALL)
+    with pytest.raises(ValueError, match="no edge"):
+        implied_risk(train)
+
+
+def test_tuning_under_risk_reads_the_aversion():
+    """No aversion is the net return; a crushing one holds as little as the grid allows."""
+    train, _ = synthetic_panels(3, **SMALL)
+    env = make_env(train, CROSS)
+    risk = implied_risk(train)
+    assert tuned_rate(env, risk=risk._replace(aversion=0.0)).rate == tuned_rate(env).rate
+    assert tuned_rate(env, risk=risk._replace(aversion=1e12)).rate == min(RATE_GRID)
+
+
+def test_an_arms_utility_is_judged_against_the_bands_like_its_net():
+    train, _ = synthetic_panels(3, **SMALL)
+    env = make_env(train, CROSS)
+    risk = implied_risk(train)
+    slow, fast = rollout(env, ConstantRate(0.2)), rollout(env, ConstantRate(1.0))
+    row, base = score(slow, fast, train.days, risk), score(fast, fast, train.days, risk)
+    assert row["utility_gain_bp_day"] == pytest.approx(
+        row["utility_bp_day"] - base["utility_bp_day"])
+    assert row["utility_gain_se"] > 0
+    assert base["utility_gain_bp_day"] == 0.0
+
+
+def test_doing_nothing_is_on_the_table_and_scores_nothing():
+    train, test = synthetic_panels(2, **SMALL)
+    arms = compare(train, test, CROSS, seeds=1, episodes=2, dqn=False, risk=implied_risk(train),
+                   log=lambda _: None)
+    idle = arms["no trading"]
+    assert idle["net_bp_day"] == idle["utility_bp_day"] == idle["gross_held"] == 0.0
+
+
+def test_every_arm_can_want_the_same_utility():
+    train, test = synthetic_panels(2, **SMALL)
+    risk = implied_risk(train)
+    arms = compare(train, test, CROSS, seeds=1, episodes=2, dqn=False, risk=risk, averse=True,
+                   log=lambda _: None)
+    assert all("utility_bp_day" in row for row in arms.values())
+    with pytest.raises(ValueError, match="risk"):
+        compare(train, test, CROSS, dqn=False, averse=True)
+
+
+def test_every_learner_is_handed_the_same_reward(monkeypatch):
+    """A learner left on the old reward would look like a result about risk."""
+    pytest.importorskip("torch")
+    from experiments.rl import dqn, ppo, study
+
+    seen = []
+
+    class Learned:
+        def policy(self, env):
+            return ConstantRate(0.5)
+
+    def learner(env, *, reward, **_):
+        seen.append(reward)
+        return Learned()
+
+    def table(env, *, reward, **_):
+        seen.append(reward)
+        return ConstantRate(0.5)
+
+    monkeypatch.setattr(study, "explore", table)
+    monkeypatch.setattr(study, "sweep", table)
+    monkeypatch.setattr(dqn, "train", learner)
+    monkeypatch.setattr(ppo, "train", learner)
+    train, test = synthetic_panels(2, **SMALL)
+    study.compare(train, test, CROSS, seeds=1, limit=0.05, risk=implied_risk(train), averse=True,
+                  log=lambda _: None)
+    assert len(seen) == 9
+    assert callable(seen[0]) and all(reward is seen[0] for reward in seen)
+
+
 def test_real_data_is_told_its_months():
     with pytest.raises(SystemExit):
         main([])
@@ -93,9 +182,10 @@ def test_the_scorecard_adds_up():
 
 
 def test_seeds_are_pooled_with_their_range():
-    pooled = _pool([{"gain_bp_day": 1.0, "net_bp_day": 3.0}, {"gain_bp_day": 3.0, "net_bp_day": 5.0}])
-    assert pooled == {"gain_bp_day": 2.0, "net_bp_day": 4.0, "seeds": 2,
-                      "gain_low": 1.0, "gain_high": 3.0}
+    pooled = _pool([{"gain_bp_day": 1.0, "net_exposure": 0.1},
+                    {"gain_bp_day": 3.0, "net_exposure": 0.5}])
+    assert pooled == pytest.approx({"gain_bp_day": 2.0, "net_exposure": 0.3, "seeds": 2,
+                                    "gain_low": 1.0, "gain_high": 3.0, "exposure_high": 0.5})
 
 
 def test_every_arm_is_judged_against_the_same_band():

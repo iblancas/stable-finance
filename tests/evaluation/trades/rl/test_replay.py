@@ -215,8 +215,8 @@ def test_a_row_is_the_name_then_the_book_without_progress():
     """Progress would read a day in training and the whole test period in evaluation."""
     world = quoted_world(seed=8)
     env = _env(world)
-    assert row_features(env) == env.name_features + ("time_of_day", "gross_held", "gross_target",
-                                                     "gross_gap")
+    assert row_features(env) == env.name_features + ("time_of_day", "gross_held", "net_held",
+                                                     "gross_target", "gross_gap")
     observation, _ = env.reset()
     observation, *_ = env.step(0.5)
     rows = name_rows(env, observation)

@@ -54,7 +54,10 @@ treats each name as an agent trains on those. :meth:`Payoff.reward` also
 gives them as ``"shortfall"``, the net return less what the target earned on
 paper: the target does not depend on the policy, so the two rewards share
 their best policy, and taking the paper return out removes some of the
-market's noise. The reward :meth:`~ExecutionEnv.step` returns stays the net.
+market's noise. Both are risk-neutral, so a learner on either has no reason
+not to hold more than the target; :func:`mean_variance_reward` makes a reward
+that charges the book's variance, a preference that shapes training and is
+never billed. The reward :meth:`~ExecutionEnv.step` returns stays the net.
 
 WHAT ANOTHER RATE WOULD HAVE DONE is a question the data can answer, because
 the market is replayed and does not respond to the policy.
@@ -137,14 +140,14 @@ from stable_finance.evaluation.preparation import (
 from stable_finance.evaluation.returns.contract import ForwardReturns
 from stable_finance.evaluation.trades.rl.features import decision_features, observable
 
-__all__ = ["BOOK_FEATURES", "REWARDS", "ExecutionEnv", "Payoff", "Rollout", "rollout",
-           "start_episode"]
+__all__ = ["BOOK_FEATURES", "REWARDS", "ExecutionEnv", "Payoff", "Rollout",
+           "mean_variance_reward", "rollout", "start_episode"]
 
 _IMPACT = ("impact", "impact_stock")
 
 #: Features of the whole book, in the order :attr:`ExecutionEnv.book_features`
 #: lists them; ``time_of_day`` is present only with ``days``.
-BOOK_FEATURES = ("progress", "time_of_day", "gross_held", "gross_target", "gross_gap")
+BOOK_FEATURES = ("progress", "time_of_day", "gross_held", "net_held", "gross_target", "gross_gap")
 
 #: What :meth:`Payoff.reward` can report.
 REWARDS = ("net", "shortfall")
@@ -179,6 +182,38 @@ class Payoff(NamedTuple):
             raise ValueError(f"reward must be one of {REWARDS}, got {kind!r}")
         net = self.earned - self.paid
         return net if kind == "net" else net - self.paper
+
+
+def mean_variance_reward(covariance: ArrayLike, risk_aversion: float, *,
+                         base: str = "shortfall") -> Callable[[Payoff], NDArray[np.float64]]:
+    """A reward for :meth:`Payoff.reward`: ``base`` less what the book's risk costs.
+
+    The portfolio stage's utility, taken each decision: ``base - risk_aversion
+    / 2 * w' Sigma w``, with ``w`` the book held after the decision's fills and
+    ``covariance`` the ``(n_assets, n_assets)`` risk of one decision's return.
+    The reward must still split by name, so name ``i`` bears ``risk_aversion /
+    2 * w_i (Sigma w)_i``, its share of the variance. The shares add up to
+    ``w' Sigma w`` exactly, and a name that hedges the book has a negative
+    share. Unlike the rest of the reward a share depends on the other names,
+    so a name is rewarded for what it does to the book.
+
+    This is a preference, not a cost. It shapes what a learner prefers and is
+    never charged: the net return an episode is scored on does not change.
+    """
+    sigma = np.asarray(covariance, dtype=np.float64)
+    if sigma.ndim != 2 or sigma.shape[0] != sigma.shape[1]:
+        raise ValueError(f"covariance must be square, got shape {sigma.shape}")
+    if not np.isfinite(sigma).all() or not np.allclose(sigma, sigma.T):
+        raise ValueError("covariance must be finite and symmetric")
+    if not np.isfinite(risk_aversion) or risk_aversion < 0:
+        raise ValueError("risk_aversion must be finite and non-negative")
+    if base not in REWARDS:
+        raise ValueError(f"base must be one of {REWARDS}, got {base!r}")
+
+    def reward(payoff: Payoff) -> NDArray[np.float64]:
+        return payoff.reward(base) - 0.5 * risk_aversion * payoff.held * (payoff.held @ sigma)
+
+    return reward
 
 
 @dataclass(frozen=True)
@@ -530,6 +565,7 @@ class ExecutionEnv:
         names = np.concatenate([np.stack(state, axis=1), self._features[t]], axis=1)
         book = {"progress": (self._t - self._start) / (self._end - self._start),
                 "gross_held": float(np.abs(self._held).sum()),
+                "net_held": float(self._held.sum()),
                 "gross_target": float(np.abs(goal).sum()),
                 "gross_gap": float(np.abs(goal - self._committed).sum())}
         if "time_of_day" in self.book_features:

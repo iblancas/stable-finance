@@ -17,6 +17,7 @@ from stable_finance import (
     rollout,
     run_backtest,
 )
+from stable_finance.evaluation.trades.rl import mean_variance_reward
 
 CONFIGS = [
     BacktestConfig(cost_model="cross", efq=0.7, annualization="decisions"),
@@ -75,6 +76,55 @@ def test_any_policy_is_scored_by_the_harness_on_its_own_path(config):
                           days=world["days"], config=config, with_series=True)
     np.testing.assert_allclose(episode.net, report.series.net, rtol=1e-12, atol=1e-15)
     np.testing.assert_allclose(episode.gross - episode.cost, episode.net, atol=1e-15)
+
+
+def test_the_risk_shares_add_up_to_the_books_variance():
+    world = quoted_world(seed=9)
+    env = _env(world, BacktestConfig(cost_model="cross", efq=0.7, annualization="decisions"))
+    mix = np.random.default_rng(0).normal(size=(5, 5))
+    sigma = mix @ mix.T * 1e-6
+    reward = mean_variance_reward(sigma, 3.0, base="net")
+    env.reset()
+    for _ in range(4):
+        _, net, _, _, info = env.step(0.5)
+    payoff = info["payoff"]
+    book = payoff.held @ sigma @ payoff.held
+    assert payoff.reward(reward).sum() == pytest.approx(net - 1.5 * book, rel=1e-12)
+    assert env.parallel_alternates([0.0, 0.5, 1.0]).reward(reward).shape == (3, 5)
+
+
+def test_a_net_bet_pays_for_the_risk_two_correlated_names_share():
+    """The same gross, nineteen times the variance: what the penalty is there to see."""
+    sigma = np.array([[1.0, 0.9], [0.9, 1.0]])
+    reward = mean_variance_reward(sigma, 2.0, base="net")
+
+    def shares(*held):
+        nothing = np.zeros(2)
+        return -Payoff(np.asarray(held), nothing, nothing, nothing, nothing).reward(reward)
+
+    assert shares(1.0, -1.0).sum() == pytest.approx(0.2)
+    assert shares(1.0, 1.0).sum() == pytest.approx(3.8)
+    assert shares(1.0, -0.5)[1] < 0                     # a name that hedges the book is paid to
+
+
+@pytest.mark.parametrize("sigma, aversion, base, message", [
+    (np.ones(3), 1.0, "net", "square"),
+    (np.array([[1.0, 0.5], [0.0, 1.0]]), 1.0, "net", "symmetric"),
+    (np.eye(2), -1.0, "net", "risk_aversion"),
+    (np.eye(2), 1.0, "sharpe", "base"),
+])
+def test_a_risk_reward_that_cannot_be_read_is_refused(sigma, aversion, base, message):
+    with pytest.raises(ValueError, match=message):
+        mean_variance_reward(sigma, aversion, base=base)
+
+
+def test_the_book_shows_its_net_exposure():
+    world = quoted_world(seed=2)
+    env = _env(world, BacktestConfig(cost_model="mid", annualization="decisions"))
+    env.reset()
+    observation, *_ = env.step(0.5)
+    held = observation["names"][:, env.name_features.index("held")]
+    assert observation["book"][env.book_features.index("net_held")] == pytest.approx(held.sum())
 
 
 def test_a_fee_is_billed_on_what_was_traded_whatever_it_earned():
@@ -227,8 +277,8 @@ def test_the_observation_names_its_columns():
     cross = _env(world, BacktestConfig(cost_model="cross"))
     assert cross.name_features == ("held", "target", "gap", "half_spread", "imbalance",
                                    "last_return", "volatility")
-    assert cross.book_features == ("progress", "time_of_day", "gross_held", "gross_target",
-                                   "gross_gap")
+    assert cross.book_features == ("progress", "time_of_day", "gross_held", "net_held",
+                                   "gross_target", "gross_gap")
     observation, _ = cross.reset()
     assert observation["names"].shape == (5, len(cross.name_features))
     quoted = np.isfinite(world["market"].get("half_spread")[0])

@@ -25,6 +25,7 @@ from stable_finance.evaluation.trades.rl.env import (
     ExecutionEnv,
     Payoff,
     Rollout,
+    mean_variance_reward,
     rollout,
 )
 from stable_finance.evaluation.trades.rl.parametric import ParametricPolicy, to_weights
@@ -42,4 +43,5 @@ from stable_finance.evaluation.trades.rl.replay import (
 
 __all__ = ["ExecutionEnv", "FollowPath", "ParametricPolicy", "Payoff", "RandomRate",
            "RandomWalkRate", "RatePerEpisode", "ReplayBuffer", "Rollout", "Transitions",
-           "collect", "name_rows", "rollout", "row_features", "to_weights"]
+           "collect", "mean_variance_reward", "name_rows", "rollout", "row_features",
+           "to_weights"]

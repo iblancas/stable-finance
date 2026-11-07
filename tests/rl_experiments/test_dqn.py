@@ -86,8 +86,9 @@ def test_intention_tells_every_name_what_the_book_would_do():
 
 
 def test_a_long_and_a_short_are_read_as_one_case():
-    columns = ("held", "target", "gap", "half_spread")
-    rows = np.array([[0.01, 0.02, 0.01, 2e-4], [-0.01, -0.02, -0.01, 2e-4], [0.0, 0.01, 0.01, 3e-4]])
+    columns = ("held", "target", "gap", "half_spread", "net_held")
+    rows = np.array([[0.01, 0.02, 0.01, 2e-4, 0.1], [-0.01, -0.02, -0.01, 2e-4, -0.1],
+                     [0.0, 0.01, 0.01, 3e-4, 0.0]])
     features = Inputs(columns, rows)(rows)
     torch.testing.assert_close(features[0], features[1])
 
