@@ -1,6 +1,8 @@
 """The study's baselines and scorecard, which every learner is judged against."""
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -148,6 +150,57 @@ def test_every_learner_is_handed_the_same_reward(monkeypatch):
 def test_real_data_is_told_its_months():
     with pytest.raises(SystemExit):
         main([])
+
+
+#: A study small enough that a check which should have refused it fails in seconds.
+TINY = ["--synthetic", "--no-dqn", "--seeds", "1", "--episodes", "2"]
+
+
+@pytest.fixture
+def small_world(monkeypatch):
+    from experiments.rl import study
+
+    made = study.synthetic_panels
+    monkeypatch.setattr(study, "synthetic_panels", lambda ic: made(2, ic=ic, **SMALL))
+    return made
+
+
+def test_the_default_reward_has_no_aversion_to_scale(small_world, tmp_path):
+    with pytest.raises(SystemExit):
+        main([*TINY, "--aversion-scales", "0.5", "--out", str(tmp_path)])
+
+
+@pytest.mark.parametrize("scales", [["-1"], ["nan"], ["inf"], ["0.5", "0.5"]])
+def test_aversion_scales_are_distinct_finite_and_not_negative(scales, small_world, tmp_path):
+    with pytest.raises(SystemExit):
+        main([*TINY, "--reward", "risk", "--aversion-scales", *scales, "--out", str(tmp_path)])
+
+
+def test_each_risk_aversion_trains_and_scores_its_own_arms(small_world, monkeypatch, tmp_path):
+    """Both panels at every multiple of the one implied aversion, each in its own file."""
+    from experiments.rl import study
+
+    seen, compared = [], study.compare
+
+    def spy(*args, risk, averse, **kwargs):
+        seen.append((risk.aversion, averse))
+        return compared(*args, risk=risk, averse=averse, **kwargs)
+
+    monkeypatch.setattr(study, "compare", spy)
+    assert main([*TINY, "--reward", "risk", "--aversion-scales", "1", "0.25",
+                 "--out", str(tmp_path)]) == 0
+    implied = implied_risk(small_world(2, ic=0.03, **SMALL)[0]).aversion
+    assert seen == pytest.approx([(implied, True), (implied / 4, True)] * 2)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "study-synthetic-risk-x0.25.json", "study-synthetic-risk.json"]
+    whole, quarter = (json.loads((tmp_path / f"study-synthetic-risk{s}.json").read_text())
+                      for s in ("", "-x0.25"))
+    assert list(whole) == list(quarter) == ["skill", "no skill"]
+    for panel in whole:
+        full, part = whole[panel]["trade to target"], quarter[panel]["trade to target"]
+        assert part["net_bp_day"] == pytest.approx(full["net_bp_day"])
+        assert part["net_bp_day"] - part["utility_bp_day"] == pytest.approx(
+            (full["net_bp_day"] - full["utility_bp_day"]) / 4)
 
 
 def test_a_band_of_no_width_trades_to_the_target():

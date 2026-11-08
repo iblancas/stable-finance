@@ -21,8 +21,15 @@ one (:func:`implied_risk`). Every arm is scored on the harness's net return
 either way, with the utility beside it, and a book that never trades is shown
 because it scores zero on both: an arm below it did worse than doing nothing.
 
+At the implied aversion a flat book can be the best one, which leaves a
+learner nothing to find. ``--aversion-scales`` repeats the risk-averse run at
+multiples of it, from the same panels, with one results file per multiple and
+a table of every arm's utility at each.
+
     uv run --extra hf --extra mds --extra rl-experiments python -m experiments.rl.study \\
         --months 2020-07 2020-08
+    uv run --extra hf --extra mds --extra rl-experiments python -m experiments.rl.study \\
+        --months 2020-07 2020-08 --reward risk --aversion-scales 1 0.25 0.1
     uv run --extra rl-experiments python -m experiments.rl.study --synthetic
 """
 
@@ -430,6 +437,17 @@ def show(title: str, arms: dict) -> None:
               f"{row.get('utility_gain_se', float('nan')):7.2f}")
 
 
+def show_by_aversion(results: dict, implied: float) -> None:
+    """Every arm's utility at each risk aversion tried, in which no trading scores 0."""
+    scales = list(results)
+    for name, arms in results[scales[0]].items():
+        print(f"\n{name}: utility by risk aversion, bp of equity a day")
+        print(f"{'arm':30s}" + "".join(f"{implied * scale:>10.0f}" for scale in scales))
+        for arm in arms:
+            print(f"{arm:30s}" + "".join(f"{results[scale][name][arm]['utility_bp_day']:10.1f}"
+                                         for scale in scales))
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--synthetic", action="store_true", help="no data needed")
@@ -444,12 +462,23 @@ def main(argv=None) -> int:
     parser.add_argument("--no-dqn", action="store_true")
     parser.add_argument("--reward", choices=("shortfall", "risk"), default="shortfall",
                         help="what every arm is after: see the module docstring")
+    parser.add_argument("--aversion-scales", type=float, nargs="+", default=[1.0],
+                        metavar="SCALE",
+                        help="with --reward risk: train at these multiples of the implied "
+                             "risk aversion, one results file each")
+    parser.add_argument("--out", type=Path, default=OUT,
+                        help=f"where the results files go (default {OUT})")
     args = parser.parse_args(argv)
     if not args.synthetic and args.months is None:
         parser.error("--months TRAIN TEST is needed unless --synthetic")
-    OUT.mkdir(parents=True, exist_ok=True)
+    scales = args.aversion_scales
+    if scales != [1.0] and args.reward != "risk":
+        parser.error("--aversion-scales needs --reward risk: the default reward has no aversion")
+    if not all(np.isfinite(s) and s >= 0 for s in scales) or len(set(scales)) < len(scales):
+        parser.error("--aversion-scales must be distinct, finite and non-negative")
+    args.out.mkdir(parents=True, exist_ok=True)
     config = sf.BacktestConfig(cost_model="cross", efq=EFQ, annualization="decisions")
-    results, risk = {}, None
+    results, risk = {scale: {} for scale in scales}, None
     for name, ic in (("skill", args.ic), ("no skill", 0.0)):
         print(f"\n== {name}, IC {ic}", flush=True)
         if args.synthetic:
@@ -461,15 +490,25 @@ def main(argv=None) -> int:
         # From the panel with skill, and kept: a preference does not change
         # because the forecast lost its edge, and no edge implies no aversion.
         risk = risk or implied_risk(train)
-        print(f"  risk aversion {risk.aversion:.0f}", flush=True)
-        results[name] = compare(train, test, config, seeds=args.seeds, episodes=args.episodes,
-                                dqn=not args.no_dqn, dqn_episodes=args.dqn_episodes,
-                                limit=args.limit, risk=risk, averse=args.reward == "risk",
-                                log=lambda text: print(text, flush=True))
-        show(f"{name}: bp of equity a day, held out", results[name])
+        for scale in scales:
+            scaled = risk._replace(aversion=risk.aversion * scale)
+            print(f"  risk aversion {scaled.aversion:.0f}"
+                  + ("" if scale == 1 else f", {scale:g} of the implied {risk.aversion:.0f}"),
+                  flush=True)
+            arms = compare(train, test, config, seeds=args.seeds, episodes=args.episodes,
+                           dqn=not args.no_dqn, dqn_episodes=args.dqn_episodes,
+                           limit=args.limit, risk=scaled, averse=args.reward == "risk",
+                           log=lambda text: print(text, flush=True))
+            results[scale][name] = arms
+            show(f"{name}: bp of equity a day, held out"
+                 + ("" if len(scales) == 1 else f", risk aversion {scaled.aversion:.0f}"), arms)
     tag = "synthetic" if args.synthetic else "-".join(args.months)
     tag += "-risk" if args.reward == "risk" else ""
-    (OUT / f"study-{tag}.json").write_text(json.dumps(results, indent=2))
+    for scale, panels in results.items():
+        suffix = "" if scale == 1 else f"-x{scale:g}"
+        (args.out / f"study-{tag}{suffix}.json").write_text(json.dumps(panels, indent=2))
+    if len(scales) > 1:
+        show_by_aversion(results, risk.aversion)
     return 0
 
 
